@@ -1,6 +1,7 @@
 [tool.poetry]
 name = "rdp-package"
 version = "0.1.0"
+authors = []
 description = ""
 packages = [{include = "rdp_package"}]
 
