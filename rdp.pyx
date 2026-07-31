@@ -1,15 +1,27 @@
 # cython: boundscheck=False, wraparound=False, cdivision=True
+# distutils: language = c++
+# distutils: include_dirs = cpp
+
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free, realloc
 from libc.math cimport fabs, sqrt, atan, cos, sin, atan2
+from libcpp cimport bool as cpp_bool
 
-cdef extern from "math.h":
-    double fabs(double x)
-    double sqrt(double x)
-    double atan(double x)
-    double cos(double x)
-    double sin(double x)
+cdef extern from "adaptive_bridge.h":
+    void rdp_adaptive_fill_mask(
+        const double* x,
+        const double* y,
+        int n,
+        char* mask,
+        cpp_bool fast_dist,
+    )
+    cpp_bool rdp_supports_avx2()
+
+
+def supports_avx2():
+    return bool(rdp_supports_avx2())
+
 
 def rdp_by_count(points, int target_count):
     cdef int n = points.shape[0]
@@ -187,6 +199,34 @@ def rdp_modified(points):
     free(mask)
 
     return result
+
+def rdp_adaptive_cpp(points, fast_dist=True):
+    cdef np.ndarray[np.float64_t, ndim=2] pts = np.ascontiguousarray(
+        points, dtype=np.float64
+    )
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        raise ValueError("points must be of shape (n_points, 2)")
+
+    cdef int n = pts.shape[0]
+    if n == 0:
+        return np.empty((0, 2), dtype=np.float64)
+    if n <= 2:
+        return pts.copy()
+
+    cdef np.ndarray[np.float64_t, ndim=1] x = np.ascontiguousarray(pts[:, 0])
+    cdef np.ndarray[np.float64_t, ndim=1] y = np.ascontiguousarray(pts[:, 1])
+    cdef np.ndarray[np.uint8_t, ndim=1] mask = np.zeros(n, dtype=np.uint8)
+    cdef cpp_bool use_fast = <cpp_bool> bool(fast_dist)
+
+    rdp_adaptive_fill_mask(
+        &x[0],
+        &y[0],
+        n,
+        <char*> &mask[0],
+        use_fast,
+    )
+    return pts[mask.astype(bool)]
+
 
 def rdp(points, int target_count = -1):
     cdef int n = points.shape[0]
