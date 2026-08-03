@@ -1,0 +1,81 @@
+# Build manylinux wheels and publish to PyPI on version tags (v*).
+#
+# One-time setup on PyPI (Trusted Publisher):
+#   https://pypi.org/manage/account/publishing/
+#   Owner: amirkazan  (or your org)
+#   Repository: rdp-package
+#   Workflow: publish.yml
+#   Environment: (leave empty)  OR create "pypi" and match below
+
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.22.0
+        env:
+          # Project targets Python 3.7 (mmcp).
+          CIBW_BUILD: cp37-manylinux_x86_64
+          CIBW_SKIP: pp* *-musllinux*
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          # Force portable flags in setup.py (no -march=native).
+          RDP_PORTABLE: "1"
+          CIBW_BEFORE_BUILD: pip install "cython==3.0.12" "numpy==1.21.1"
+          CIBW_BUILD_VERBOSITY: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Build sdist
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.7"
+      - run: |
+          pip install build "cython==3.0.12" "numpy==1.21.1"
+          python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

@@ -1,5 +1,8 @@
 build/
+dist/
+*.egg-info/
 *.so
 rdp.cpp
 rdp.c
 *.html
+.idea/

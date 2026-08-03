@@ -1,3 +1,4 @@
+import os
 import platform
 import sys
 
@@ -9,6 +10,9 @@ import numpy as np
 def extra_compile_args():
     machine = platform.machine().lower()
     is_x86 = machine in ("x86_64", "amd64", "x64")
+    # Portable wheels / other machines: never use -march=native.
+    portable = os.environ.get("CIBUILDWHEEL") == "1" or os.environ.get("RDP_PORTABLE") == "1"
+
     if sys.platform == "win32":
         args = ["/O2", "/DNDEBUG", "/std:c++17"]
         if is_x86:
@@ -17,15 +21,20 @@ def extra_compile_args():
 
     args = ["-O3", "-DNDEBUG", "-std=c++17"]
     if is_x86:
-        # Binary may contain AVX2 opcodes; AdaptiveRdp.h dispatches at runtime.
-        args += ["-march=native", "-mavx2", "-mfma"]
+        # AVX2 opcodes are behind a runtime CPUID check in AdaptiveRdp.h.
+        args += ["-mavx2", "-mfma"]
+        if not portable:
+            args.append("-march=native")
     return args
 
+
+# Prefer .pyx when present (dev / sdist). Fall back to pre-generated .cpp.
+_source = "rdp.pyx" if os.path.exists("rdp.pyx") else "rdp.cpp"
 
 extensions = [
     Extension(
         "rdp",
-        sources=["rdp.pyx"],
+        sources=[_source],
         language="c++",
         include_dirs=[np.get_include(), "cpp"],
         extra_compile_args=extra_compile_args(),
@@ -33,13 +42,19 @@ extensions = [
     )
 ]
 
-setup(
-    name="rdp-package",
-    version="0.2.0",
-    description="RDP Cython package + optional rdp_adaptive_cpp (C++/AVX2)",
-    ext_modules=cythonize(
+if _source.endswith(".pyx"):
+    ext_modules = cythonize(
         extensions,
         compiler_directives={"language_level": "3"},
-    ),
+    )
+else:
+    ext_modules = extensions
+
+setup(
+    name="rdp-package",
+    version="0.2.1",
+    description="RDP Cython package + optional rdp_adaptive_cpp (C++/AVX2)",
+    ext_modules=ext_modules,
+    include_package_data=True,
     zip_safe=False,
 )
