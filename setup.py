@@ -50,10 +50,19 @@ if _source.endswith(".pyx"):
 else:
     ext_modules = extensions
 
+_here = os.path.dirname(os.path.abspath(__file__))
+_readme = os.path.join(_here, "README.md")
+long_description = ""
+if os.path.exists(_readme):
+    with open(_readme, encoding="utf-8") as f:
+        long_description = f.read()
+
 setup(
     name="rdp-package",
-    version="0.2.1",
+    version="0.3.0",
     description="RDP Cython package + optional rdp_adaptive_cpp (C++/AVX2)",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     include_package_data=True,
     zip_safe=False,

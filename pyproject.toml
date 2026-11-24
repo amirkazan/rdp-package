@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "rdp-package"
-version = "0.2.1"
+version = "0.3.0"
 authors = []
 description = "RDP Cython package + optional rdp_adaptive_cpp (C++/AVX2)"
 packages = [

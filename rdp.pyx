@@ -15,8 +15,8 @@ cdef extern from "adaptive_bridge.h":
         int n,
         char* mask,
         cpp_bool fast_dist,
-    )
-    cpp_bool rdp_supports_avx2()
+    ) nogil
+    cpp_bool rdp_supports_avx2() nogil
 
 
 def supports_avx2():
@@ -24,89 +24,105 @@ def supports_avx2():
 
 
 def rdp_by_count(points, int target_count):
-    cdef int n = points.shape[0]
-
-    cdef double* x = <double*> malloc(n * sizeof(double))
-    cdef double* y = <double*> malloc(n * sizeof(double))
-    cdef int i
-
-    for i in range(n):
-        x[i] = points[i, 0]
-        y[i] = points[i, 1]
+    cdef np.ndarray[np.float64_t, ndim=2] pts = np.ascontiguousarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        raise ValueError("points must be of shape (n_points, 2)")
+    cdef int n = pts.shape[0]
+    if target_count >= n:
+        return pts
 
     cdef np.ndarray[np.float64_t, ndim=1] weights = np.zeros(n, dtype=np.float64)
     weights[0] = float("inf")
     weights[n - 1] = float("inf")
 
+    cdef double[:, ::1] pv = pts
+    cdef double[::1] wv = weights
+
+    cdef double* x = <double*> malloc(n * sizeof(double))
+    cdef double* y = <double*> malloc(n * sizeof(double))
     cdef int stack_capacity = 1024
     cdef int* stack = <int*> malloc(stack_capacity * 2 * sizeof(int))
-    cdef int sp = 0
-    stack[0] = 0
-    stack[1] = n - 1
-    sp = 1
+    if x == NULL or y == NULL or stack == NULL:
+        free(x)
+        free(y)
+        free(stack)
+        raise MemoryError()
 
-    cdef int st, ed, index
+    cdef int i, sp = 0, st, ed, index
     cdef double dx, dy, norm, t, px, py, projx, projy, dist2, max_dist
 
-    while sp > 0:
-        sp -= 1
-        st = stack[sp * 2]
-        ed = stack[sp * 2 + 1]
+    try:
+        with nogil:
+            for i in range(n):
+                x[i] = pv[i, 0]
+                y[i] = pv[i, 1]
 
-        if ed <= st + 1:
-            continue
+            stack[0] = 0
+            stack[1] = n - 1
+            sp = 1
 
-        dx = x[ed] - x[st]
-        dy = y[ed] - y[st]
-        norm = dx * dx + dy * dy
+            while sp > 0:
+                sp -= 1
+                st = stack[sp * 2]
+                ed = stack[sp * 2 + 1]
 
-        max_dist = -1
-        index = -1
+                if ed <= st + 1:
+                    continue
 
-        for i in range(st + 1, ed):
-            px = x[i]
-            py = y[i]
-            if norm == 0:
-                dist2 = (px - x[st])**2 + (py - y[st])**2
-            else:
-                t = ((px - x[st]) * dx + (py - y[st]) * dy) / norm
-                if t < 0:
-                    projx = x[st]
-                    projy = y[st]
-                elif t > 1:
-                    projx = x[ed]
-                    projy = y[ed]
-                else:
-                    projx = x[st] + t * dx
-                    projy = y[st] + t * dy
-                dist2 = (px - projx)**2 + (py - projy)**2
+                dx = x[ed] - x[st]
+                dy = y[ed] - y[st]
+                norm = dx * dx + dy * dy
 
-            if dist2 > max_dist:
-                max_dist = dist2
-                index = i
+                max_dist = -1
+                index = -1
 
-        if index != -1:
-            weights[index] = max_dist
-            if sp + 2 >= stack_capacity:
-                stack_capacity *= 2
-                stack = <int*> realloc(stack, stack_capacity * 2 * sizeof(int))
-            stack[sp * 2] = st
-            stack[sp * 2 + 1] = index
-            sp += 1
-            stack[sp * 2] = index
-            stack[sp * 2 + 1] = ed
-            sp += 1
+                for i in range(st + 1, ed):
+                    px = x[i]
+                    py = y[i]
+                    if norm == 0:
+                        dist2 = (px - x[st])**2 + (py - y[st])**2
+                    else:
+                        t = ((px - x[st]) * dx + (py - y[st]) * dy) / norm
+                        if t < 0:
+                            projx = x[st]
+                            projy = y[st]
+                        elif t > 1:
+                            projx = x[ed]
+                            projy = y[ed]
+                        else:
+                            projx = x[st] + t * dx
+                            projy = y[st] + t * dy
+                        dist2 = (px - projx)**2 + (py - projy)**2
 
-    free(stack)
-    free(x)
-    free(y)
+                    if dist2 > max_dist:
+                        max_dist = dist2
+                        index = i
+
+                if index != -1:
+                    wv[index] = max_dist
+                    if sp + 2 >= stack_capacity:
+                        stack_capacity *= 2
+                        stack = <int*> realloc(stack, stack_capacity * 2 * sizeof(int))
+                        if stack == NULL:
+                            with gil:
+                                raise MemoryError()
+                    stack[sp * 2] = st
+                    stack[sp * 2 + 1] = index
+                    sp += 1
+                    stack[sp * 2] = index
+                    stack[sp * 2 + 1] = ed
+                    sp += 1
+    finally:
+        free(x)
+        free(y)
+        free(stack)
 
     cdef np.ndarray[np.intp_t, ndim=1] indices = np.argpartition(weights, -target_count)[-target_count:]
     indices = np.sort(indices)
 
-    return points[indices]
+    return pts[indices]
 
-cdef double compute_epsilon(double dx, double dy):
+cdef double compute_epsilon(double dx, double dy) noexcept nogil:
     cdef double s = sqrt(dx * dx + dy * dy)
     if s == 0:
         return 0.0
@@ -124,7 +140,7 @@ cdef double compute_epsilon(double dx, double dy):
 
 cdef double point_to_segment_distance_sq(double x, double y,
                                             double x1, double y1,
-                                            double x2, double y2):
+                                            double x2, double y2) noexcept nogil:
     cdef double dx = x2 - x1
     cdef double dy = y2 - y1
     cdef double px = x - x1
@@ -145,7 +161,7 @@ cdef double point_to_segment_distance_sq(double x, double y,
     dy = y - proj_y
     return dx * dx + dy * dy
 
-cdef void _rdp_modified(double* x, double* y, int n, char* mask):
+cdef void _rdp_modified(double* x, double* y, int n, char* mask) noexcept nogil:
     cdef int i, index_max
     cdef double d_max_sq, d_sq
     cdef double dx, dy, epsilon
@@ -187,7 +203,8 @@ def rdp_modified(points):
         y[i] = points[i][1]
         mask[i] = 1
 
-    _rdp_modified(x, y, n, mask)
+    with nogil:
+        _rdp_modified(x, y, n, mask)
 
     result = []
     for i in range(n):
@@ -218,13 +235,13 @@ def rdp_adaptive_cpp(points, fast_dist=True):
     cdef np.ndarray[np.uint8_t, ndim=1] mask = np.zeros(n, dtype=np.uint8)
     cdef cpp_bool use_fast = <cpp_bool> bool(fast_dist)
 
-    rdp_adaptive_fill_mask(
-        &x[0],
-        &y[0],
-        n,
-        <char*> &mask[0],
-        use_fast,
-    )
+    cdef double* xp = <double*> &x[0]
+    cdef double* yp = <double*> &y[0]
+    cdef char* mp = <char*> &mask[0]
+
+    with nogil:
+        rdp_adaptive_fill_mask(xp, yp, n, mp, use_fast)
+
     return pts[mask.astype(bool)]
 
 
